@@ -1,0 +1,21 @@
+{
+  "app.title": "AI Document Redactor Pro",
+  "app.subtitle": "Caviardage 100% Hors Ligne",
+  "sidebar.presets": "Préréglages de Caviardage",
+  "sidebar.locale": "Langue / Localisation",
+  "sidebar.actions": "Actions",
+  "sidebar.results": "Résultats de Détection",
+  "action.analyze": "Analyser le Document",
+  "action.redact_all": "Caviarder Toutes les Détections",
+  "action.clear": "Effacer les Caviardages",
+  "action.export": "Exporter le Document Assaini",
+  "action.open": "Ouvrir un Fichier...",
+  "status.ready": "Prêt",
+  "status.complete": "Analyse terminée : {count} entités trouvées",
+  "entity.person": "Noms / Personnes",
+  "entity.iban": "IBAN",
+  "entity.email": "Adresses E-mail",
+  "entity.phone": "Numéros de Téléphone",
+  "dropzone.title": "Glissez-déposez le Fichier Ici",
+  "dropzone.subtitle": "Supportés : PDF, JPG, PNG"
+}
