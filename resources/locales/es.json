@@ -1,0 +1,21 @@
+{
+  "app.title": "AI Document Redactor Pro",
+  "app.subtitle": "Redacción 100% Sin Conexión",
+  "sidebar.presets": "Preajustes de Redacción",
+  "sidebar.locale": "Idioma / Localización",
+  "sidebar.actions": "Acciones",
+  "sidebar.results": "Resultados de Detección",
+  "action.analyze": "Analizar Documento",
+  "action.redact_all": "Redactar Todas las Detecciones",
+  "action.clear": "Borrar Redacciones",
+  "action.export": "Exportar Documento Sanitizado",
+  "action.open": "Abrir Archivo...",
+  "status.ready": "Listo",
+  "status.complete": "Análisis completo: {count} entidades encontradas",
+  "entity.person": "Nombres / Personas",
+  "entity.iban": "IBAN",
+  "entity.email": "Direcciones de Correo",
+  "entity.phone": "Números de Teléfono",
+  "dropzone.title": "Arrastra y Suelta el Archivo Aquí",
+  "dropzone.subtitle": "Soportados: PDF, JPG, PNG"
+}
