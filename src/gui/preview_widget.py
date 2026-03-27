@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QFrame,
 )
 
-from ..core.ocr_engine import TextBlock
+from core.ocr_engine import TextBlock
 
 logger = logging.getLogger(__name__)
 

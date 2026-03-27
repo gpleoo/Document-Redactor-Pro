@@ -14,14 +14,14 @@ from PyQt6.QtWidgets import (
     QFileDialog, QMessageBox, QSplitter, QApplication, QStackedWidget,
 )
 
-from ..core.ocr_engine import OCREngine, TextBlock, PageData
-from ..core.ner_engine import NEREngine, EntityType, DetectedEntity
-from ..core.pdf_processor import PDFProcessor, RedactionArea
-from ..core.file_manager import FileManager
-from .theme import DarkTheme
-from .drop_zone import DropZoneWidget
-from .preview_widget import PreviewWidget
-from .sidebar import SidebarWidget
+from core.ocr_engine import OCREngine, TextBlock, PageData
+from core.ner_engine import NEREngine, EntityType, DetectedEntity
+from core.pdf_processor import PDFProcessor, RedactionArea
+from core.file_manager import FileManager
+from gui.theme import DarkTheme
+from gui.drop_zone import DropZoneWidget
+from gui.preview_widget import PreviewWidget
+from gui.sidebar import SidebarWidget
 
 logger = logging.getLogger(__name__)
 

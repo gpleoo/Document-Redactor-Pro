@@ -6,7 +6,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QPainter, QPen, QColor, QFont
 from PyQt6.QtWidgets import QFrame
 
-from ..core.file_manager import SUPPORTED_EXTENSIONS
+from core.file_manager import SUPPORTED_EXTENSIONS
 
 
 class DropZoneWidget(QFrame):
