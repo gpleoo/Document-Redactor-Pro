@@ -13,7 +13,7 @@ from typing import Optional
 import fitz  # PyMuPDF
 from PIL import Image
 
-from .ocr_engine import TextBlock
+from core.ocr_engine import TextBlock
 
 logger = logging.getLogger(__name__)
 

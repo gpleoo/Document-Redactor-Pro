@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QWidget, QGroupBox, QProgressBar, QSpacerItem, QSizePolicy,
 )
 
-from ..core.ner_engine import EntityType
+from core.ner_engine import EntityType
 
 
 ENTITY_LABELS = {
