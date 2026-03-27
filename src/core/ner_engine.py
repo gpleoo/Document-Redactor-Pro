@@ -126,10 +126,13 @@ class NEREngine:
 
     def _initialize(self):
         """Load spaCy model and Presidio analyzer."""
+        self._loaded_model_name = None
+
         if SPACY_AVAILABLE:
             model_name = self.DEFAULT_SPACY_MODELS.get(self._locale, "en_core_web_sm")
             try:
                 self._nlp = spacy.load(model_name)
+                self._loaded_model_name = model_name
                 logger.info(f"Loaded spaCy model: {model_name}")
             except OSError:
                 logger.warning(
@@ -138,13 +141,14 @@ class NEREngine:
                 )
                 try:
                     self._nlp = spacy.load("en_core_web_sm")
+                    self._loaded_model_name = "en_core_web_sm"
                 except OSError:
                     logger.warning("No spaCy model available; using regex-only mode")
 
-        if PRESIDIO_AVAILABLE and self._nlp is not None:
+        if PRESIDIO_AVAILABLE and self._nlp is not None and self._loaded_model_name:
             try:
                 nlp_engine = SpacyNlpEngine(
-                    models=[{"lang_code": self._locale, "model_name": self._nlp.meta["name"]}]
+                    models=[{"lang_code": self._locale, "model_name": self._loaded_model_name}]
                 )
                 self._analyzer = AnalyzerEngine(
                     nlp_engine=nlp_engine,
@@ -152,7 +156,8 @@ class NEREngine:
                 )
                 logger.info("Presidio analyzer initialized")
             except Exception as e:
-                logger.warning(f"Failed to initialize Presidio: {e}")
+                logger.warning(f"Failed to initialize Presidio (will use spaCy + regex): {e}")
+                self._analyzer = None
 
     @property
     def locale(self) -> str:
