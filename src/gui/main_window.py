@@ -221,6 +221,8 @@ class MainWindow(QMainWindow):
 
         self._render_page(0)
 
+    RENDER_ZOOM = 1.5
+
     def _render_page(self, page_idx: int):
         if not self._pdf_processor.is_loaded:
             return
@@ -228,7 +230,7 @@ class MainWindow(QMainWindow):
             return
 
         self._current_page_idx = page_idx
-        pix = self._pdf_processor.get_page_pixmap(page_idx, zoom=1.5)
+        pix = self._pdf_processor.get_page_pixmap(page_idx, zoom=self.RENDER_ZOOM)
         if not pix:
             return
 
@@ -240,6 +242,7 @@ class MainWindow(QMainWindow):
         self._preview.display_page(
             pixmap, page_blocks,
             page_idx, self._pdf_processor.page_count,
+            render_scale=self.RENDER_ZOOM,
         )
         self._update_preview_overlays()
 
