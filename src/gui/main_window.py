@@ -18,6 +18,7 @@ from core.ocr_engine import OCREngine, TextBlock, PageData
 from core.ner_engine import NEREngine, EntityType, DetectedEntity
 from core.pdf_processor import PDFProcessor, RedactionArea
 from core.file_manager import FileManager
+from utils.i18n import I18n
 from gui.theme import DarkTheme
 from gui.drop_zone import DropZoneWidget
 from gui.preview_widget import PreviewWidget
@@ -83,6 +84,7 @@ class MainWindow(QMainWindow):
         self.resize(1400, 850)
 
         # Core engines
+        self._i18n = I18n(locale="it")
         self._file_manager = FileManager()
         self._ocr_engine = OCREngine()
         self._ner_engine = NEREngine()
@@ -110,7 +112,7 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         # Sidebar
-        self._sidebar = SidebarWidget()
+        self._sidebar = SidebarWidget(self._i18n)
         self._sidebar.analyze_clicked.connect(self._on_analyze)
         self._sidebar.redact_all_clicked.connect(self._on_redact_all_detected)
         self._sidebar.clear_clicked.connect(self._on_clear_redactions)
@@ -221,6 +223,8 @@ class MainWindow(QMainWindow):
 
         self._render_page(0)
 
+    RENDER_ZOOM = 1.5
+
     def _render_page(self, page_idx: int):
         if not self._pdf_processor.is_loaded:
             return
@@ -228,7 +232,7 @@ class MainWindow(QMainWindow):
             return
 
         self._current_page_idx = page_idx
-        pix = self._pdf_processor.get_page_pixmap(page_idx, zoom=1.5)
+        pix = self._pdf_processor.get_page_pixmap(page_idx, zoom=self.RENDER_ZOOM)
         if not pix:
             return
 
@@ -240,6 +244,7 @@ class MainWindow(QMainWindow):
         self._preview.display_page(
             pixmap, page_blocks,
             page_idx, self._pdf_processor.page_count,
+            render_scale=self.RENDER_ZOOM,
         )
         self._update_preview_overlays()
 
@@ -427,6 +432,8 @@ class MainWindow(QMainWindow):
             "it": "ita+eng", "en": "eng", "de": "deu+eng",
             "fr": "fra+eng", "es": "spa+eng",
         }.get(locale, "eng")
+        self._i18n.locale = locale
+        self._sidebar.update_labels()
 
     def _on_presets_changed(self, enabled: set):
         self._ner_engine.enabled_entities = enabled

@@ -34,11 +34,14 @@ class PageCanvas(QWidget):
         self._ai_detected_indices: set[int] = set()
         self._hovered_index: Optional[int] = None
         self._zoom: float = 1.0
+        self._render_scale: float = 1.0  # pixmap-to-PDF coordinate scale
         self.setMouseTracking(True)
 
-    def set_page(self, pixmap: QPixmap, blocks: list[TextBlock]):
+    def set_page(self, pixmap: QPixmap, blocks: list[TextBlock],
+                 render_scale: float = 1.0):
         self._pixmap = pixmap
         self._blocks = blocks
+        self._render_scale = render_scale
         self._update_size()
         self.update()
 
@@ -80,23 +83,22 @@ class PageCanvas(QWidget):
         )
         painter.drawPixmap(0, 0, scaled)
 
+        s = self._render_scale * self._zoom  # total scale: PDF coords -> screen
+
         for idx, block in enumerate(self._blocks):
+            padding = 1.0
             rect = QRectF(
-                block.x0 * self._zoom,
-                block.y0 * self._zoom,
-                block.width * self._zoom,
-                block.height * self._zoom,
+                (block.x0 - padding) * s,
+                (block.y0 - padding) * s,
+                (block.width + padding * 2) * s,
+                (block.height + padding * 2) * s,
             )
 
             if idx in self._redacted_indices:
-                painter.fillRect(rect, QColor(0, 0, 0, 230))
-                label_font = QFont("Segoe UI", max(6, int(7 * self._zoom)))
-                painter.setFont(label_font)
-                painter.setPen(QColor(255, 255, 255, 180))
-                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "REDACTED")
+                painter.fillRect(rect, QColor(0, 0, 0, 240))
             elif idx in self._ai_detected_indices:
                 painter.setPen(QPen(QColor("#ef4444"), 2))
-                painter.setBrush(QBrush(QColor(239, 68, 68, 50)))
+                painter.setBrush(QBrush(QColor(239, 68, 68, 40)))
                 painter.drawRect(rect)
             elif idx == self._hovered_index:
                 painter.setPen(QPen(QColor("#2563eb"), 1.5))
@@ -124,8 +126,9 @@ class PageCanvas(QWidget):
                 self.block_clicked.emit(idx)
 
     def _hit_test(self, pos: QPointF) -> Optional[int]:
-        x = pos.x() / self._zoom
-        y = pos.y() / self._zoom
+        s = self._render_scale * self._zoom
+        x = pos.x() / s
+        y = pos.y() / s
         for idx, block in enumerate(self._blocks):
             if block.x0 <= x <= block.x1 and block.y0 <= y <= block.y1:
                 return idx
@@ -207,10 +210,11 @@ class PreviewWidget(QFrame):
         layout.addWidget(self._scroll_area)
 
     def display_page(self, pixmap: QPixmap, blocks: list[TextBlock],
-                     page_idx: int, total_pages: int):
+                     page_idx: int, total_pages: int,
+                     render_scale: float = 1.0):
         self._current_page = page_idx
         self._total_pages = total_pages
-        self._canvas.set_page(pixmap, blocks)
+        self._canvas.set_page(pixmap, blocks, render_scale)
         self._page_label.setText(f"Page {page_idx + 1}/{total_pages}")
 
     def update_redactions(self, redacted: set[int], ai_detected: set[int]):
