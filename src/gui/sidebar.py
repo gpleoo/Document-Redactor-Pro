@@ -11,21 +11,22 @@ from PyQt6.QtWidgets import (
 )
 
 from core.ner_engine import EntityType
+from utils.i18n import I18n
 
 
-ENTITY_LABELS = {
-    EntityType.PERSON: "Names / Persons",
-    EntityType.FISCAL_CODE: "Fiscal Codes (IT)",
-    EntityType.SSN: "SSN (US)",
-    EntityType.IBAN: "IBAN",
-    EntityType.EMAIL: "Email Addresses",
-    EntityType.PHONE: "Phone Numbers",
-    EntityType.ADDRESS: "Addresses",
-    EntityType.DATE_OF_BIRTH: "Dates of Birth",
-    EntityType.CREDIT_CARD: "Credit Card Numbers",
-    EntityType.SIGNATURE: "Signatures",
-    EntityType.ORGANIZATION: "Organizations",
-    EntityType.LOCATION: "Locations",
+ENTITY_I18N_KEYS = {
+    EntityType.PERSON: "entity.person",
+    EntityType.FISCAL_CODE: "entity.fiscal_code",
+    EntityType.SSN: "entity.ssn",
+    EntityType.IBAN: "entity.iban",
+    EntityType.EMAIL: "entity.email",
+    EntityType.PHONE: "entity.phone",
+    EntityType.ADDRESS: "entity.address",
+    EntityType.DATE_OF_BIRTH: "entity.dob",
+    EntityType.CREDIT_CARD: "entity.credit_card",
+    EntityType.SIGNATURE: "entity.signature",
+    EntityType.ORGANIZATION: "entity.organization",
+    EntityType.LOCATION: "entity.location",
 }
 
 LOCALE_OPTIONS = [
@@ -40,17 +41,18 @@ LOCALE_OPTIONS = [
 class SidebarWidget(QFrame):
     """Left sidebar with redaction presets and controls."""
 
-    presets_changed = pyqtSignal(set)    # emits set of enabled EntityTypes
+    presets_changed = pyqtSignal(set)
     analyze_clicked = pyqtSignal()
     redact_all_clicked = pyqtSignal()
     clear_clicked = pyqtSignal()
     export_clicked = pyqtSignal()
     locale_changed = pyqtSignal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, i18n: I18n, parent=None):
         super().__init__(parent)
         self.setObjectName("sidebarFrame")
         self.setFixedWidth(280)
+        self._i18n = i18n
         self._checkboxes: dict[EntityType, QCheckBox] = {}
         self._setup_ui()
 
@@ -75,30 +77,30 @@ class SidebarWidget(QFrame):
         title.setStyleSheet("color: #2563eb;")
         layout.addWidget(title)
 
-        subtitle = QLabel("100% Offline Redaction")
-        subtitle.setObjectName("statusLabel")
-        layout.addWidget(subtitle)
+        self._subtitle = QLabel(self._i18n.t("app.subtitle"))
+        self._subtitle.setObjectName("statusLabel")
+        layout.addWidget(self._subtitle)
 
         layout.addSpacing(8)
 
         # Locale selector
-        locale_group = QGroupBox("Language / Locale")
+        self._locale_group = QGroupBox(self._i18n.t("sidebar.locale"))
         locale_layout = QVBoxLayout()
         self._locale_combo = QComboBox()
         for label, code in LOCALE_OPTIONS:
             self._locale_combo.addItem(label, code)
         self._locale_combo.currentIndexChanged.connect(self._on_locale_changed)
         locale_layout.addWidget(self._locale_combo)
-        locale_group.setLayout(locale_layout)
-        layout.addWidget(locale_group)
+        self._locale_group.setLayout(locale_layout)
+        layout.addWidget(self._locale_group)
 
         # Preset checkboxes
-        preset_group = QGroupBox("Redaction Presets")
+        self._preset_group = QGroupBox(self._i18n.t("sidebar.presets"))
         preset_layout = QVBoxLayout()
         preset_layout.setSpacing(6)
 
-        for entity_type, label in ENTITY_LABELS.items():
-            cb = QCheckBox(label)
+        for entity_type, i18n_key in ENTITY_I18N_KEYS.items():
+            cb = QCheckBox(self._i18n.t(i18n_key))
             cb.setChecked(entity_type in {
                 EntityType.PERSON, EntityType.FISCAL_CODE, EntityType.SSN,
                 EntityType.IBAN, EntityType.EMAIL, EntityType.PHONE,
@@ -108,19 +110,19 @@ class SidebarWidget(QFrame):
             self._checkboxes[entity_type] = cb
             preset_layout.addWidget(cb)
 
-        preset_group.setLayout(preset_layout)
-        layout.addWidget(preset_group)
+        self._preset_group.setLayout(preset_layout)
+        layout.addWidget(self._preset_group)
 
         # Select / Deselect all
         sel_layout = QHBoxLayout()
-        select_all = QPushButton("Select All")
-        select_all.setObjectName("secondaryButton")
-        select_all.clicked.connect(self._select_all)
-        deselect_all = QPushButton("Deselect All")
-        deselect_all.setObjectName("secondaryButton")
-        deselect_all.clicked.connect(self._deselect_all)
-        sel_layout.addWidget(select_all)
-        sel_layout.addWidget(deselect_all)
+        self._select_all_btn = QPushButton(self._i18n.t("action.select_all"))
+        self._select_all_btn.setObjectName("secondaryButton")
+        self._select_all_btn.clicked.connect(self._select_all)
+        self._deselect_all_btn = QPushButton(self._i18n.t("action.deselect_all"))
+        self._deselect_all_btn.setObjectName("secondaryButton")
+        self._deselect_all_btn.clicked.connect(self._deselect_all)
+        sel_layout.addWidget(self._select_all_btn)
+        sel_layout.addWidget(self._deselect_all_btn)
         layout.addLayout(sel_layout)
 
         layout.addSpacing(8)
@@ -132,16 +134,16 @@ class SidebarWidget(QFrame):
         self._progress_bar.setVisible(False)
         layout.addWidget(self._progress_bar)
 
-        self._status_label = QLabel("Ready")
+        self._status_label = QLabel(self._i18n.t("status.ready"))
         self._status_label.setObjectName("statusLabel")
         layout.addWidget(self._status_label)
 
         layout.addSpacing(4)
 
         # Detection results summary
-        self._results_group = QGroupBox("Detection Results")
+        self._results_group = QGroupBox(self._i18n.t("sidebar.results"))
         self._results_layout = QVBoxLayout()
-        self._results_label = QLabel("No analysis performed yet.")
+        self._results_label = QLabel("")
         self._results_label.setWordWrap(True)
         self._results_label.setObjectName("statusLabel")
         self._results_layout.addWidget(self._results_label)
@@ -152,21 +154,21 @@ class SidebarWidget(QFrame):
         layout.addSpacing(8)
 
         # Action buttons
-        actions_group = QGroupBox("Actions")
+        self._actions_group = QGroupBox(self._i18n.t("sidebar.actions"))
         actions_layout = QVBoxLayout()
         actions_layout.setSpacing(8)
 
-        self._analyze_btn = QPushButton("Analyze Document")
+        self._analyze_btn = QPushButton(self._i18n.t("action.analyze"))
         self._analyze_btn.setEnabled(False)
         self._analyze_btn.clicked.connect(self.analyze_clicked.emit)
         actions_layout.addWidget(self._analyze_btn)
 
-        self._redact_btn = QPushButton("Redact All Detected")
+        self._redact_btn = QPushButton(self._i18n.t("action.redact_all"))
         self._redact_btn.setEnabled(False)
         self._redact_btn.clicked.connect(self.redact_all_clicked.emit)
         actions_layout.addWidget(self._redact_btn)
 
-        self._clear_btn = QPushButton("Clear Redactions")
+        self._clear_btn = QPushButton(self._i18n.t("action.clear"))
         self._clear_btn.setObjectName("secondaryButton")
         self._clear_btn.setEnabled(False)
         self._clear_btn.clicked.connect(self.clear_clicked.emit)
@@ -174,7 +176,7 @@ class SidebarWidget(QFrame):
 
         actions_layout.addSpacing(4)
 
-        self._export_btn = QPushButton("Export Sanitized Document")
+        self._export_btn = QPushButton(self._i18n.t("action.export"))
         self._export_btn.setEnabled(False)
         self._export_btn.setStyleSheet(
             "QPushButton { background-color: #22c55e; font-size: 14px; padding: 12px; }"
@@ -183,19 +185,40 @@ class SidebarWidget(QFrame):
         self._export_btn.clicked.connect(self.export_clicked.emit)
         actions_layout.addWidget(self._export_btn)
 
-        actions_group.setLayout(actions_layout)
-        layout.addWidget(actions_group)
+        self._actions_group.setLayout(actions_layout)
+        layout.addWidget(self._actions_group)
 
         layout.addSpacerItem(QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
 
         # Footer
-        footer = QLabel("v1.0.0 | Privacy-First")
-        footer.setObjectName("statusLabel")
-        footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(footer)
+        self._footer = QLabel(self._i18n.t("footer.version"))
+        self._footer.setObjectName("statusLabel")
+        self._footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._footer)
 
         scroll.setWidget(container)
         main_layout.addWidget(scroll)
+
+    def update_labels(self):
+        """Refresh all UI labels after locale change."""
+        t = self._i18n.t
+        self._subtitle.setText(t("app.subtitle"))
+        self._locale_group.setTitle(t("sidebar.locale"))
+        self._preset_group.setTitle(t("sidebar.presets"))
+        self._results_group.setTitle(t("sidebar.results"))
+        self._actions_group.setTitle(t("sidebar.actions"))
+        self._analyze_btn.setText(t("action.analyze"))
+        self._redact_btn.setText(t("action.redact_all"))
+        self._clear_btn.setText(t("action.clear"))
+        self._export_btn.setText(t("action.export"))
+        self._select_all_btn.setText(t("action.select_all"))
+        self._deselect_all_btn.setText(t("action.deselect_all"))
+        self._status_label.setText(t("status.ready"))
+        self._footer.setText(t("footer.version"))
+
+        for entity_type, i18n_key in ENTITY_I18N_KEYS.items():
+            if entity_type in self._checkboxes:
+                self._checkboxes[entity_type].setText(t(i18n_key))
 
     def get_enabled_entities(self) -> set[EntityType]:
         return {et for et, cb in self._checkboxes.items() if cb.isChecked()}
@@ -214,13 +237,15 @@ class SidebarWidget(QFrame):
         self._export_btn.setEnabled(True)
         self._results_group.setVisible(True)
 
+        t = self._i18n.t
         lines = []
         total = 0
         for et, count in sorted(entity_counts.items(), key=lambda x: -x[1]):
-            label = ENTITY_LABELS.get(et, et.value)
+            i18n_key = ENTITY_I18N_KEYS.get(et, et.value)
+            label = t(i18n_key)
             lines.append(f"  {label}: {count}")
             total += count
-        summary = f"Found {total} sensitive items:\n" + "\n".join(lines)
+        summary = t("status.complete", count=total) + "\n" + "\n".join(lines)
         self._results_label.setText(summary)
 
     def set_progress(self, value: int, status: str = ""):
@@ -234,7 +259,8 @@ class SidebarWidget(QFrame):
 
     def _on_locale_changed(self):
         code = self._locale_combo.currentData()
-        self.locale_changed.emit(code)
+        if code:
+            self.locale_changed.emit(code)
 
     def _select_all(self):
         for cb in self._checkboxes.values():
