@@ -1,55 +1,43 @@
 """
-AI Document Redactor Pro - Main Entry Point
-100% Offline Document Redaction Tool
+Document Redactor Pro - Entry Point
+AI-powered document redaction, 100% offline.
 """
 
-import logging
 import sys
 import os
+import logging
+
+# Ensure src/ is in path for absolute imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QIcon
 
+from gui.theme import apply_theme
 from gui.main_window import MainWindow
-from gui.theme import DarkTheme
-from utils.config import AppConfig
-
-
-def setup_logging():
-    """Configure application logging."""
-    log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    logging.basicConfig(
-        level=logging.INFO,
-        format=log_format,
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
 
 
 def main():
-    setup_logging()
-    logger = logging.getLogger(__name__)
-    logger.info("Starting AI Document Redactor Pro")
-
-    config = AppConfig.load()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
 
     app = QApplication(sys.argv)
-    app.setApplicationName("AI Document Redactor Pro")
+    app.setApplicationName("Document Redactor Pro")
     app.setOrganizationName("RedactorPro")
-    app.setApplicationVersion("1.0.0")
 
-    # Apply dark theme
-    app.setStyleSheet(DarkTheme.get_stylesheet())
+    # Enable high-DPI scaling
+    app.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
+
+    apply_theme(app)
 
     window = MainWindow()
-    window.resize(config.window_width, config.window_height)
     window.show()
 
-    logger.info("Application ready")
-    exit_code = app.exec()
-
-    config.save()
-    sys.exit(exit_code)
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
