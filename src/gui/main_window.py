@@ -119,6 +119,7 @@ class MainWindow(QMainWindow):
         self._sidebar.export_clicked.connect(self._on_export)
         self._sidebar.locale_changed.connect(self._on_locale_changed)
         self._sidebar.presets_changed.connect(self._on_presets_changed)
+        self._sidebar.redaction_style_changed.connect(self._on_redaction_style_changed)
 
         # Content area (stacked: drop zone vs preview)
         self._content_stack = QStackedWidget()
@@ -335,10 +336,38 @@ class MainWindow(QMainWindow):
         offset = self._get_global_block_offset(self._current_page_idx)
         global_idx = local_idx + offset
 
-        if global_idx in self._redacted_block_indices:
-            self._redacted_block_indices.discard(global_idx)
+        if global_idx >= len(self._all_blocks):
+            return
+
+        clicked_text = self._all_blocks[global_idx].text.strip()
+        is_redacting = global_idx not in self._redacted_block_indices
+
+        if self._sidebar.propagate_enabled and clicked_text:
+            # Propagate: find ALL blocks with the same text across entire document
+            matching_indices = {
+                i for i, block in enumerate(self._all_blocks)
+                if block.text.strip().lower() == clicked_text.lower()
+            }
+            if is_redacting:
+                self._redacted_block_indices.update(matching_indices)
+                count = len(matching_indices)
+                if count > 1:
+                    self._sidebar.set_progress(
+                        100, f"'{clicked_text}' - {count} occorrenze selezionate"
+                    )
+            else:
+                self._redacted_block_indices -= matching_indices
+                count = len(matching_indices)
+                if count > 1:
+                    self._sidebar.set_progress(
+                        100, f"'{clicked_text}' - {count} occorrenze deselezionate"
+                    )
         else:
-            self._redacted_block_indices.add(global_idx)
+            # Single toggle
+            if is_redacting:
+                self._redacted_block_indices.add(global_idx)
+            else:
+                self._redacted_block_indices.discard(global_idx)
 
         self._update_preview_overlays()
 
@@ -349,6 +378,13 @@ class MainWindow(QMainWindow):
     def _on_clear_redactions(self):
         self._redacted_block_indices.clear()
         self._update_preview_overlays()
+
+    def _on_redaction_style_changed(self):
+        style = self._sidebar.get_redaction_style()
+        self._preview.set_redaction_style(
+            color_rgb=style["preview_color_rgb"],
+            replacement_text=style["replacement_text"],
+        )
 
     # --- Export ---
 
@@ -377,11 +413,17 @@ class MainWindow(QMainWindow):
         self._sidebar.set_progress(10, "Applying redactions...")
         QApplication.processEvents()
 
+        style = self._sidebar.get_redaction_style()
         redaction_areas: list[RedactionArea] = []
         for global_idx in sorted(self._redacted_block_indices):
             if global_idx < len(self._all_blocks):
                 block = self._all_blocks[global_idx]
-                areas = self._pdf_processor.blocks_to_redaction_areas([block])
+                areas = self._pdf_processor.blocks_to_redaction_areas(
+                    [block],
+                    fill_color=style["fill_color"],
+                    text_color=style["text_color"],
+                    replacement_text=style["replacement_text"],
+                )
                 redaction_areas.extend(areas)
 
         if redaction_areas:

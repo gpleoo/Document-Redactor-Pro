@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel,
     QCheckBox, QPushButton, QComboBox, QScrollArea,
     QWidget, QGroupBox, QProgressBar, QSpacerItem, QSizePolicy,
+    QLineEdit, QRadioButton, QButtonGroup,
 )
 
 from core.ner_engine import EntityType
@@ -47,6 +48,7 @@ class SidebarWidget(QFrame):
     clear_clicked = pyqtSignal()
     export_clicked = pyqtSignal()
     locale_changed = pyqtSignal(str)
+    redaction_style_changed = pyqtSignal()  # emitted when style/color/text changes
 
     def __init__(self, i18n: I18n, parent=None):
         super().__init__(parent)
@@ -153,6 +155,61 @@ class SidebarWidget(QFrame):
 
         layout.addSpacing(8)
 
+        # Redaction style
+        self._style_group = QGroupBox("Stile Redazione")
+        style_layout = QVBoxLayout()
+        style_layout.setSpacing(6)
+
+        self._style_btn_group = QButtonGroup(self)
+        self._radio_black = QRadioButton("Nero (black)")
+        self._radio_black.setChecked(True)
+        self._radio_white = QRadioButton("Bianco (white)")
+        self._radio_custom = QRadioButton("Testo sostitutivo:")
+        self._style_btn_group.addButton(self._radio_black, 0)
+        self._style_btn_group.addButton(self._radio_white, 1)
+        self._style_btn_group.addButton(self._radio_custom, 2)
+
+        self._custom_text_input = QLineEdit()
+        self._custom_text_input.setPlaceholderText("Inserisci testo sostitutivo...")
+        self._custom_text_input.setEnabled(False)
+        self._custom_text_input.setStyleSheet(
+            "QLineEdit { background-color: #252547; color: #e2e8f0; "
+            "border: 1px solid #334155; border-radius: 6px; padding: 6px; }"
+            "QLineEdit:focus { border-color: #2563eb; }"
+            "QLineEdit:disabled { color: #475569; }"
+        )
+
+        self._radio_custom.toggled.connect(
+            lambda checked: self._custom_text_input.setEnabled(checked)
+        )
+        self._style_btn_group.buttonClicked.connect(
+            lambda: self.redaction_style_changed.emit()
+        )
+        self._custom_text_input.textChanged.connect(
+            lambda: self.redaction_style_changed.emit()
+        )
+
+        style_layout.addWidget(self._radio_black)
+        style_layout.addWidget(self._radio_white)
+        style_layout.addWidget(self._radio_custom)
+        style_layout.addWidget(self._custom_text_input)
+
+        self._style_group.setLayout(style_layout)
+        layout.addWidget(self._style_group)
+
+        layout.addSpacing(4)
+
+        # Word propagation option
+        self._propagate_cb = QCheckBox("Propaga su tutto il documento")
+        self._propagate_cb.setChecked(True)
+        self._propagate_cb.setToolTip(
+            "Quando clicchi una parola, tutte le occorrenze\n"
+            "identiche nel documento vengono selezionate."
+        )
+        layout.addWidget(self._propagate_cb)
+
+        layout.addSpacing(8)
+
         # Action buttons
         self._actions_group = QGroupBox(self._i18n.t("sidebar.actions"))
         actions_layout = QVBoxLayout()
@@ -222,6 +279,42 @@ class SidebarWidget(QFrame):
 
     def get_enabled_entities(self) -> set[EntityType]:
         return {et for et, cb in self._checkboxes.items() if cb.isChecked()}
+
+    def get_redaction_style(self) -> dict:
+        """Return current redaction style settings.
+
+        Returns dict with keys:
+            fill_color: (r, g, b) floats 0-1
+            text_color: (r, g, b) floats 0-1
+            replacement_text: str
+            preview_color: QColor for preview overlay
+        """
+        style_id = self._style_btn_group.checkedId()
+        if style_id == 1:  # White
+            return {
+                "fill_color": (1, 1, 1),
+                "text_color": (1, 1, 1),
+                "replacement_text": "",
+                "preview_color_rgb": (255, 255, 255),
+            }
+        elif style_id == 2:  # Custom text
+            return {
+                "fill_color": (1, 1, 1),
+                "text_color": (0, 0, 0),
+                "replacement_text": self._custom_text_input.text(),
+                "preview_color_rgb": (200, 200, 255),
+            }
+        else:  # Black (default)
+            return {
+                "fill_color": (0, 0, 0),
+                "text_color": (1, 1, 1),
+                "replacement_text": "",
+                "preview_color_rgb": (0, 0, 0),
+            }
+
+    @property
+    def propagate_enabled(self) -> bool:
+        return self._propagate_cb.isChecked()
 
     def set_document_loaded(self, loaded: bool):
         self._analyze_btn.setEnabled(loaded)

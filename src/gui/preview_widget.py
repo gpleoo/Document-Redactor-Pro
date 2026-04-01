@@ -35,7 +35,15 @@ class PageCanvas(QWidget):
         self._hovered_index: Optional[int] = None
         self._zoom: float = 1.0
         self._render_scale: float = 1.0  # pixmap-to-PDF coordinate scale
+        self._redaction_color: tuple[int, int, int] = (0, 0, 0)  # RGB 0-255
+        self._redaction_replacement: str = ""
         self.setMouseTracking(True)
+
+    def set_redaction_style(self, color_rgb: tuple[int, int, int],
+                            replacement_text: str = ""):
+        self._redaction_color = color_rgb
+        self._redaction_replacement = replacement_text
+        self.update()
 
     def set_page(self, pixmap: QPixmap, blocks: list[TextBlock],
                  render_scale: float = 1.0):
@@ -95,7 +103,19 @@ class PageCanvas(QWidget):
             )
 
             if idx in self._redacted_indices:
-                painter.fillRect(rect, QColor(0, 0, 0, 240))
+                r, g, b = self._redaction_color
+                painter.fillRect(rect, QColor(r, g, b, 240))
+                # Draw replacement text if set
+                if self._redaction_replacement:
+                    label_font = QFont("Segoe UI", max(6, int(8 * self._zoom)))
+                    painter.setFont(label_font)
+                    # Text color: black on white, white on black
+                    if r + g + b > 384:
+                        painter.setPen(QColor(0, 0, 0, 220))
+                    else:
+                        painter.setPen(QColor(255, 255, 255, 200))
+                    painter.drawText(rect, Qt.AlignmentFlag.AlignCenter,
+                                     self._redaction_replacement)
             elif idx in self._ai_detected_indices:
                 painter.setPen(QPen(QColor("#ef4444"), 2))
                 painter.setBrush(QBrush(QColor(239, 68, 68, 40)))
@@ -220,6 +240,10 @@ class PreviewWidget(QFrame):
     def update_redactions(self, redacted: set[int], ai_detected: set[int]):
         self._canvas.set_redacted(redacted)
         self._canvas.set_ai_detected(ai_detected)
+
+    def set_redaction_style(self, color_rgb: tuple[int, int, int],
+                            replacement_text: str = ""):
+        self._canvas.set_redaction_style(color_rgb, replacement_text)
 
     def _on_block_clicked(self, idx: int):
         self.block_toggled.emit(idx)
