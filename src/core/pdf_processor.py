@@ -26,7 +26,10 @@ class RedactionArea:
     y0: float
     x1: float
     y1: float
-    label: str = "REDACTED"
+    label: str = ""
+    fill_color: tuple[float, float, float] = (0, 0, 0)  # RGB 0-1: black
+    text_color: tuple[float, float, float] = (1, 1, 1)   # RGB 0-1: white
+    replacement_text: str = ""  # custom text to show in redacted area
 
     @property
     def rect(self) -> fitz.Rect:
@@ -163,12 +166,17 @@ class PDFProcessor:
                 if area.page >= self._page_count:
                     continue
                 page = self._doc[area.page]
-                annot = page.add_redact_annot(
+
+                display_text = area.replacement_text or area.label or ""
+                fill = area.fill_color
+                text_color = area.text_color
+
+                page.add_redact_annot(
                     area.rect,
-                    text=area.label if area.label else "",
+                    text=display_text,
                     fontsize=self.REDACTION_FONT_SIZE,
-                    fill=self.REDACTION_FILL_COLOR,
-                    text_color=self.REDACTION_TEXT_COLOR,
+                    fill=fill,
+                    text_color=text_color,
                 )
                 pages_with_redactions.add(area.page)
 
@@ -237,7 +245,11 @@ class PDFProcessor:
             return False
 
     def blocks_to_redaction_areas(
-        self, blocks: list[TextBlock], label: str = "REDACTED"
+        self,
+        blocks: list[TextBlock],
+        fill_color: tuple[float, float, float] = (0, 0, 0),
+        text_color: tuple[float, float, float] = (1, 1, 1),
+        replacement_text: str = "",
     ) -> list[RedactionArea]:
         """Convert TextBlocks to RedactionAreas for redaction."""
         areas: list[RedactionArea] = []
@@ -249,7 +261,9 @@ class PDFProcessor:
                 y0=block.y0 - padding,
                 x1=block.x1 + padding,
                 y1=block.y1 + padding,
-                label=label,
+                fill_color=fill_color,
+                text_color=text_color,
+                replacement_text=replacement_text,
             ))
         return areas
 
