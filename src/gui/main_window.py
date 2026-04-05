@@ -1,108 +1,85 @@
 """
-Main Window - Primary application window integrating all components.
+Main Window - Integrates all widgets into the Document Redactor Pro application.
+Coordinates document loading, search, redaction, and export workflows.
 """
 
 import logging
-import os
 from pathlib import Path
-from typing import Optional
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
-from PyQt6.QtGui import QImage, QPixmap, QAction, QFont
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QPixmap, QImage
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QFileDialog, QMessageBox, QSplitter, QApplication, QStackedWidget,
+    QStackedWidget, QFileDialog, QMessageBox, QInputDialog,
+    QApplication,
 )
 
+import fitz
+
 from core.ocr_engine import OCREngine, TextBlock, PageData
-from core.ner_engine import NEREngine, EntityType, DetectedEntity
-from core.pdf_processor import PDFProcessor, RedactionArea
+from core.regex_detector import RegexDetector, PatternType
+from core.text_search import TextSearchEngine
+from core.pdf_processor import PDFProcessor
 from core.file_manager import FileManager
-from utils.i18n import I18n
-from gui.theme import DarkTheme
-from gui.drop_zone import DropZoneWidget
-from gui.preview_widget import PreviewWidget
-from gui.sidebar import SidebarWidget
+from core.profile_manager import ProfileManager, RedactionProfile
+
+from gui.theme import Colors
+from gui.widgets.drop_zone import DropZone
+from gui.widgets.preview_widget import PreviewWidget, RENDER_SCALE
+from gui.widgets.sidebar import Sidebar
 
 logger = logging.getLogger(__name__)
 
 
-class AnalysisWorker(QObject):
-    """Background worker for OCR + NER analysis."""
-    progress = pyqtSignal(int, str)
-    finished = pyqtSignal(list, list)  # pages, entities
+class ExtractWorker(QThread):
+    """Background thread for text extraction."""
+    progress = pyqtSignal(int, int)
+    finished = pyqtSignal(list)  # list[PageData]
     error = pyqtSignal(str)
 
-    def __init__(self, ocr: OCREngine, ner: NEREngine, file_path: str, is_pdf: bool):
+    def __init__(self, ocr: OCREngine, path: str, is_pdf: bool):
         super().__init__()
         self._ocr = ocr
-        self._ner = ner
-        self._file_path = file_path
+        self._path = path
         self._is_pdf = is_pdf
 
     def run(self):
         try:
-            self.progress.emit(10, "Running OCR extraction...")
-
             if self._is_pdf:
-                def ocr_progress(current, total):
-                    pct = int(10 + (current / max(total, 1)) * 40)
-                    self.progress.emit(pct, f"OCR: page {current}/{total}")
-                pages = self._ocr.extract_from_pdf(self._file_path, ocr_progress)
+                pages = self._ocr.extract_from_pdf(self._path, self.progress.emit)
             else:
-                pages = [self._ocr.extract_from_image(self._file_path)]
-                self.progress.emit(50, "OCR complete")
-
-            self.progress.emit(60, "Running NER analysis...")
-
-            all_entities: list[DetectedEntity] = []
-            total_pages = len(pages)
-            for i, page_data in enumerate(pages):
-                if page_data.blocks:
-                    entities = self._ner.analyze_blocks(page_data.blocks)
-                    all_entities.extend(entities)
-                pct = int(60 + ((i + 1) / max(total_pages, 1)) * 35)
-                self.progress.emit(pct, f"NER: page {i + 1}/{total_pages}")
-
-            self.progress.emit(100, f"Analysis complete: {len(all_entities)} entities found")
-            self.finished.emit(pages, all_entities)
-
+                page = self._ocr.extract_from_image(self._path)
+                pages = [page]
+            self.finished.emit(pages)
         except Exception as e:
-            logger.exception("Analysis failed")
             self.error.emit(str(e))
 
 
 class MainWindow(QMainWindow):
-    """Primary application window."""
-
-    APP_TITLE = "AI Document Redactor Pro"
+    """Main application window."""
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(self.APP_TITLE)
+        self.setWindowTitle("Document Redactor Pro")
         self.setMinimumSize(1200, 750)
         self.resize(1400, 850)
 
         # Core engines
-        self._i18n = I18n(locale="it")
-        self._file_manager = FileManager()
-        self._ocr_engine = OCREngine()
-        self._ner_engine = NEREngine()
-        self._pdf_processor = PDFProcessor()
+        self._ocr = OCREngine()
+        self._detector = RegexDetector()
+        self._search_engine = TextSearchEngine()
+        self._pdf_proc = PDFProcessor()
+        self._file_mgr = FileManager()
+        self._profile_mgr = ProfileManager()
 
         # State
-        self._pages: list[PageData] = []
-        self._entities: list[DetectedEntity] = []
-        self._current_page_idx = 0
-        self._redacted_block_indices: set[int] = set()
-        self._ai_detected_indices: set[int] = set()
-        self._all_blocks: list[TextBlock] = []
-        self._page_block_offsets: list[tuple[int, int]] = []  # (start_idx, end_idx) per page
-
-        self._analysis_thread: Optional[QThread] = None
+        self._pages_data: list[PageData] = []
+        self._selected_global_indices: set[int] = set()  # global block indices to redact
+        self._worker: ExtractWorker | None = None
 
         self._setup_ui()
-        self._setup_menu()
+        self._connect_signals()
+        self._refresh_profiles()
 
     def _setup_ui(self):
         central = QWidget()
@@ -112,405 +89,356 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         # Sidebar
-        self._sidebar = SidebarWidget(self._i18n)
-        self._sidebar.analyze_clicked.connect(self._on_analyze)
-        self._sidebar.redact_all_clicked.connect(self._on_redact_all_detected)
-        self._sidebar.clear_clicked.connect(self._on_clear_redactions)
-        self._sidebar.export_clicked.connect(self._on_export)
-        self._sidebar.locale_changed.connect(self._on_locale_changed)
-        self._sidebar.presets_changed.connect(self._on_presets_changed)
-        self._sidebar.redaction_style_changed.connect(self._on_redaction_style_changed)
+        self._sidebar = Sidebar()
+        main_layout.addWidget(self._sidebar)
 
         # Content area (stacked: drop zone vs preview)
-        self._content_stack = QStackedWidget()
+        self._stack = QStackedWidget()
 
-        # Drop zone (index 0)
-        self._drop_zone = DropZoneWidget()
-        self._drop_zone.file_dropped.connect(self._on_file_loaded)
-        self._content_stack.addWidget(self._drop_zone)
+        # Page 0: Drop zone
+        self._drop_zone = DropZone()
+        self._stack.addWidget(self._drop_zone)
 
-        # Preview (index 1)
+        # Page 1: Preview
         self._preview = PreviewWidget()
-        self._preview.block_toggled.connect(self._on_block_toggled)
-        self._preview.prev_button.clicked.connect(self._on_prev_page)
-        self._preview.next_button.clicked.connect(self._on_next_page)
-        self._content_stack.addWidget(self._preview)
+        self._stack.addWidget(self._preview)
 
-        self._content_stack.setCurrentIndex(0)
+        self._stack.setCurrentIndex(0)
+        main_layout.addWidget(self._stack, 1)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._sidebar)
-        splitter.addWidget(self._content_stack)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([280, 1120])
+    def _connect_signals(self):
+        # File loading
+        self._drop_zone.file_dropped.connect(self._load_document)
 
-        main_layout.addWidget(splitter)
+        # Preview click
+        self._preview.block_clicked.connect(self._on_block_clicked)
 
-    def _setup_menu(self):
-        menubar = self.menuBar()
+        # Search
+        self._sidebar.search_panel.search_changed.connect(self._on_search)
+        self._sidebar.search_panel.word_add_requested.connect(self._on_word_add_from_search)
+        self._sidebar.search_panel.result_clicked.connect(self._on_search_result_clicked)
 
-        file_menu = menubar.addMenu("&File")
+        # Word list
+        self._sidebar.word_list_panel.words_changed.connect(self._on_words_changed)
+        self._sidebar.word_list_panel.profile_load_requested.connect(self._on_profile_action)
+        self._sidebar.word_list_panel.profile_save_requested.connect(self._on_save_profile)
 
-        open_action = QAction("&Open File...", self)
-        open_action.setShortcut("Ctrl+O")
-        open_action.triggered.connect(self._on_open_file)
-        file_menu.addAction(open_action)
+        # Redaction style
+        self._sidebar.redaction_style_changed.connect(self._on_style_changed)
 
-        export_action = QAction("&Export Redacted...", self)
-        export_action.setShortcut("Ctrl+Shift+S")
-        export_action.triggered.connect(self._on_export)
-        file_menu.addAction(export_action)
+        # Pattern scan
+        self._sidebar.scan_requested.connect(self._on_scan_patterns)
 
-        file_menu.addSeparator()
+        # Actions
+        self._sidebar.apply_requested.connect(self._on_apply_redactions)
+        self._sidebar.export_requested.connect(self._on_export)
 
-        quit_action = QAction("&Quit", self)
-        quit_action.setShortcut("Ctrl+Q")
-        quit_action.triggered.connect(self.close)
-        file_menu.addAction(quit_action)
+    # ═══════════════════════════════════════════════════════
+    # DOCUMENT LOADING
+    # ═══════════════════════════════════════════════════════
+    def _load_document(self, file_path: str):
+        if not self._file_mgr.is_supported(file_path):
+            QMessageBox.warning(self, "Errore", "Formato file non supportato.")
+            return
 
-        edit_menu = menubar.addMenu("&Edit")
-
-        analyze_action = QAction("&Analyze Document", self)
-        analyze_action.setShortcut("Ctrl+A")
-        analyze_action.triggered.connect(self._on_analyze)
-        edit_menu.addAction(analyze_action)
-
-        redact_all_action = QAction("&Redact All Detected", self)
-        redact_all_action.setShortcut("Ctrl+R")
-        redact_all_action.triggered.connect(self._on_redact_all_detected)
-        edit_menu.addAction(redact_all_action)
-
-        clear_action = QAction("&Clear Redactions", self)
-        clear_action.triggered.connect(self._on_clear_redactions)
-        edit_menu.addAction(clear_action)
-
-        help_menu = menubar.addMenu("&Help")
-        about_action = QAction("&About", self)
-        about_action.triggered.connect(self._show_about)
-        help_menu.addAction(about_action)
-
-    # --- File Operations ---
-
-    def _on_open_file(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open Document", "",
-            "Supported Files (*.pdf *.jpg *.jpeg *.png);;PDF Files (*.pdf);;Images (*.jpg *.jpeg *.png)"
-        )
-        if path:
-            self._on_file_loaded(path)
-
-    def _on_file_loaded(self, file_path: str):
-        self._reset_state()
-
-        working = self._file_manager.load_file(file_path)
+        working = self._file_mgr.load_file(file_path)
         if not working:
-            QMessageBox.critical(self, "Error", f"Failed to load file:\n{file_path}")
+            QMessageBox.warning(self, "Errore", "Impossibile caricare il file.")
             return
 
-        if self._file_manager.is_pdf:
-            success = self._pdf_processor.load(working)
+        # Load into PDF processor
+        if self._file_mgr.is_pdf:
+            ok = self._pdf_proc.load(working)
         else:
-            success = self._pdf_processor.load_image(working)
+            ok = self._pdf_proc.load_image(working)
 
-        if not success:
-            QMessageBox.critical(self, "Error", "Failed to process the document.")
+        if not ok:
+            QMessageBox.warning(self, "Errore", "Impossibile elaborare il file.")
             return
 
-        self.setWindowTitle(f"{self.APP_TITLE} - {os.path.basename(file_path)}")
-        self._sidebar.set_document_loaded(True)
-        self._sidebar.set_progress(0, "Document loaded. Click 'Analyze' to start.")
-        self._content_stack.setCurrentIndex(1)
+        self._sidebar.set_status(f"Caricamento: {Path(file_path).name}")
+        self._sidebar.set_progress(0, 100)
 
-        self._render_page(0)
+        # Reset state
+        self._pages_data = []
+        self._selected_global_indices.clear()
+        self._preview.clear_pages()
 
-    RENDER_ZOOM = 1.5
+        # Start extraction in background
+        self._worker = ExtractWorker(self._ocr, working, self._file_mgr.is_pdf)
+        self._worker.progress.connect(self._on_extract_progress)
+        self._worker.finished.connect(self._on_extract_done)
+        self._worker.error.connect(self._on_extract_error)
+        self._worker.start()
 
-    def _render_page(self, page_idx: int):
-        if not self._pdf_processor.is_loaded:
-            return
-        if page_idx < 0 or page_idx >= self._pdf_processor.page_count:
-            return
+    def _on_extract_progress(self, current: int, total: int):
+        self._sidebar.set_progress(current, total)
+        self._sidebar.set_status(f"Estrazione testo: pagina {current}/{total}")
 
-        self._current_page_idx = page_idx
-        pix = self._pdf_processor.get_page_pixmap(page_idx, zoom=self.RENDER_ZOOM)
-        if not pix:
-            return
+    def _on_extract_done(self, pages: list):
+        self._pages_data = pages
+        self._sidebar.set_progress(100, 100)
 
-        img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGB888)
-        pixmap = QPixmap.fromImage(img)
+        # Index blocks for search
+        all_blocks = [p.blocks for p in pages]
+        self._search_engine.set_blocks(all_blocks)
 
-        page_blocks = self._get_page_blocks(page_idx)
+        # Render pages
+        self._render_all_pages()
 
-        self._preview.display_page(
-            pixmap, page_blocks,
-            page_idx, self._pdf_processor.page_count,
-            render_scale=self.RENDER_ZOOM,
+        self._stack.setCurrentIndex(1)
+        self._sidebar.set_actions_enabled(True)
+
+        total_words = sum(len(p.blocks) for p in pages)
+        self._sidebar.set_status(
+            f"{len(pages)} pagine, {total_words} parole estratte"
         )
-        self._update_preview_overlays()
+        self._worker = None
 
-    def _get_page_blocks(self, page_idx: int) -> list[TextBlock]:
-        if page_idx < len(self._pages):
-            return self._pages[page_idx].blocks
-        return []
+    def _on_extract_error(self, msg: str):
+        QMessageBox.critical(self, "Errore Estrazione", msg)
+        self._sidebar.set_status("Errore durante l'estrazione")
+        self._sidebar.set_progress(100, 100)
+        self._worker = None
 
-    def _get_global_block_offset(self, page_idx: int) -> int:
-        if page_idx < len(self._page_block_offsets):
-            return self._page_block_offsets[page_idx][0]
-        return 0
+    def _render_all_pages(self):
+        self._preview.clear_pages()
+        for page_data in self._pages_data:
+            pix = self._pdf_proc.get_page_pixmap(page_data.page_number, zoom=RENDER_SCALE)
+            if pix:
+                img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGB888)
+                qpix = QPixmap.fromImage(img)
+                self._preview.add_page(qpix, page_data.blocks, page_data.page_number)
 
-    def _update_preview_overlays(self):
-        offset = self._get_global_block_offset(self._current_page_idx)
-        page_blocks = self._get_page_blocks(self._current_page_idx)
-        num_blocks = len(page_blocks)
-
-        local_redacted = {i for i in range(num_blocks) if (i + offset) in self._redacted_block_indices}
-        local_detected = {i for i in range(num_blocks) if (i + offset) in self._ai_detected_indices}
-
-        self._preview.update_redactions(local_redacted, local_detected)
-
-    # --- Analysis ---
-
-    def _on_analyze(self):
-        if not self._pdf_processor.is_loaded:
+    # ═══════════════════════════════════════════════════════
+    # BLOCK SELECTION & PROPAGATION
+    # ═══════════════════════════════════════════════════════
+    def _on_block_clicked(self, page_idx: int, block_idx_in_page: int):
+        """Handle click on a block in the preview."""
+        if page_idx >= len(self._pages_data):
             return
 
-        if self._analysis_thread and self._analysis_thread.isRunning():
+        page_data = self._pages_data[page_idx]
+        if block_idx_in_page >= len(page_data.blocks):
             return
 
-        working = str(self._file_manager.working_copy)
-        self._ner_engine.enabled_entities = self._sidebar.get_enabled_entities()
+        block = page_data.blocks[block_idx_in_page]
+        start, _ = self._search_engine.get_page_range(page_idx)
+        global_idx = start + block_idx_in_page
 
-        worker = AnalysisWorker(
-            self._ocr_engine, self._ner_engine,
-            working, self._file_manager.is_pdf,
-        )
-
-        self._analysis_thread = QThread()
-        worker.moveToThread(self._analysis_thread)
-        self._analysis_thread.started.connect(worker.run)
-
-        worker.progress.connect(self._on_analysis_progress)
-        worker.finished.connect(self._on_analysis_finished)
-        worker.error.connect(self._on_analysis_error)
-        worker.finished.connect(self._analysis_thread.quit)
-        worker.error.connect(self._analysis_thread.quit)
-
-        self._worker = worker  # prevent GC
-        self._analysis_thread.start()
-
-    def _on_analysis_progress(self, pct: int, status: str):
-        self._sidebar.set_progress(pct, status)
-
-    def _on_analysis_finished(self, pages: list, entities: list):
-        self._pages = pages
-        self._entities = entities
-
-        self._all_blocks = []
-        self._page_block_offsets = []
-        for page_data in self._pages:
-            start = len(self._all_blocks)
-            self._all_blocks.extend(page_data.blocks)
-            end = len(self._all_blocks)
-            self._page_block_offsets.append((start, end))
-
-        self._ai_detected_indices = set()
-        for entity in self._entities:
-            for block_idx in entity.source_block_indices:
-                self._ai_detected_indices.add(block_idx)
-
-        entity_counts: dict[EntityType, int] = {}
-        for e in self._entities:
-            entity_counts[e.entity_type] = entity_counts.get(e.entity_type, 0) + 1
-
-        self._sidebar.set_analysis_complete(entity_counts)
-        self._render_page(self._current_page_idx)
-
-    def _on_analysis_error(self, error_msg: str):
-        self._sidebar.set_progress(0, f"Error: {error_msg}")
-        QMessageBox.critical(self, "Analysis Error", f"Analysis failed:\n{error_msg}")
-
-    # --- Redaction ---
-
-    def _on_block_toggled(self, local_idx: int):
-        offset = self._get_global_block_offset(self._current_page_idx)
-        global_idx = local_idx + offset
-
-        if global_idx >= len(self._all_blocks):
-            return
-
-        clicked_text = self._all_blocks[global_idx].text.strip()
-        is_redacting = global_idx not in self._redacted_block_indices
-
-        if self._sidebar.propagate_enabled and clicked_text:
-            # Propagate: find ALL blocks with the same text across entire document
-            matching_indices = {
-                i for i, block in enumerate(self._all_blocks)
-                if block.text.strip().lower() == clicked_text.lower()
-            }
-            if is_redacting:
-                self._redacted_block_indices.update(matching_indices)
-                count = len(matching_indices)
-                if count > 1:
-                    self._sidebar.set_progress(
-                        100, f"'{clicked_text}' - {count} occorrenze selezionate"
-                    )
+        # Toggle selection
+        if global_idx in self._selected_global_indices:
+            # Deselect this block (and propagated ones if propagation is on)
+            if self._sidebar.propagation_enabled:
+                propagated = self._search_engine.search_exact_word(block.text)
+                for gi in propagated:
+                    self._selected_global_indices.discard(gi)
             else:
-                self._redacted_block_indices -= matching_indices
-                count = len(matching_indices)
-                if count > 1:
-                    self._sidebar.set_progress(
-                        100, f"'{clicked_text}' - {count} occorrenze deselezionate"
-                    )
+                self._selected_global_indices.discard(global_idx)
         else:
-            # Single toggle
-            if is_redacting:
-                self._redacted_block_indices.add(global_idx)
+            # Select this block (and propagate if enabled)
+            if self._sidebar.propagation_enabled:
+                propagated = self._search_engine.search_exact_word(block.text)
+                self._selected_global_indices.update(propagated)
+                # Also add to word list
+                self._sidebar.word_list_panel.add_word(block.text)
             else:
-                self._redacted_block_indices.discard(global_idx)
+                self._selected_global_indices.add(global_idx)
 
-        self._update_preview_overlays()
+        self._update_preview_selections()
 
-    def _on_redact_all_detected(self):
-        self._redacted_block_indices.update(self._ai_detected_indices)
-        self._update_preview_overlays()
+    def _update_preview_selections(self):
+        """Update all page canvases with current selection state."""
+        selections: dict[int, set[int]] = {}
+        for page_data in self._pages_data:
+            pidx = page_data.page_number
+            start, end = self._search_engine.get_page_range(pidx)
+            page_selected = set()
+            for gi in range(start, end):
+                if gi in self._selected_global_indices:
+                    page_selected.add(gi - start)
+            if page_selected:
+                selections[pidx] = page_selected
+        self._preview.set_all_selections(selections)
 
-    def _on_clear_redactions(self):
-        self._redacted_block_indices.clear()
-        self._update_preview_overlays()
+    # ═══════════════════════════════════════════════════════
+    # SEARCH
+    # ═══════════════════════════════════════════════════════
+    def _on_search(self, query: str):
+        if not query.strip():
+            self._sidebar.search_panel.clear_results()
+            return
+        results = self._search_engine.search(
+            query, case_sensitive=self._sidebar.search_panel.case_sensitive
+        )
+        self._sidebar.search_panel.set_results(results)
 
-    def _on_redaction_style_changed(self):
-        style = self._sidebar.get_redaction_style()
-        self._preview.set_redaction_style(
-            color_rgb=style["preview_color_rgb"],
-            replacement_text=style["replacement_text"],
+    def _on_word_add_from_search(self, word: str):
+        self._sidebar.word_list_panel.add_word(word)
+
+    def _on_search_result_clicked(self, page: int, block_index: int):
+        self._preview.scroll_to_page(page)
+
+    # ═══════════════════════════════════════════════════════
+    # WORD LIST → SELECTION SYNC
+    # ═══════════════════════════════════════════════════════
+    def _on_words_changed(self, words: list[str]):
+        """Rebuild selection from current word list."""
+        self._selected_global_indices.clear()
+        if words:
+            indices = self._search_engine.search_multi_words(words)
+            self._selected_global_indices = indices
+        self._update_preview_selections()
+
+    # ═══════════════════════════════════════════════════════
+    # PATTERN SCANNING
+    # ═══════════════════════════════════════════════════════
+    def _on_scan_patterns(self):
+        if not self._pages_data:
+            return
+
+        enabled = self._sidebar.get_enabled_patterns()
+        self._detector.enabled_types = enabled
+
+        found_words: set[str] = set()
+        for page_data in self._pages_data:
+            matched = self._detector.scan_blocks(page_data.blocks)
+            for block_idx, matches in matched.items():
+                found_words.add(page_data.blocks[block_idx].text)
+
+        if found_words:
+            self._sidebar.word_list_panel.add_words(list(found_words))
+            self._sidebar.set_status(f"Pattern trovati: {len(found_words)} parole aggiunte")
+        else:
+            self._sidebar.set_status("Nessun pattern trovato")
+
+    # ═══════════════════════════════════════════════════════
+    # REDACTION STYLE
+    # ═══════════════════════════════════════════════════════
+    def _on_style_changed(self, style: str, custom_text: str):
+        self._preview.set_redaction_style(style, custom_text)
+
+    # ═══════════════════════════════════════════════════════
+    # PROFILES
+    # ═══════════════════════════════════════════════════════
+    def _refresh_profiles(self):
+        names = self._profile_mgr.list_profiles()
+        self._sidebar.word_list_panel.set_profile_list(names)
+
+    def _on_profile_action(self, name: str):
+        if name.startswith("__DELETE__"):
+            real_name = name[10:]
+            self._profile_mgr.delete_profile(real_name)
+            self._refresh_profiles()
+            self._sidebar.set_status(f"Profilo \"{real_name}\" eliminato")
+            return
+
+        profile = self._profile_mgr.load_profile(name)
+        if profile:
+            self._sidebar.word_list_panel.set_words(profile.words)
+            self._sidebar.set_status(f"Profilo \"{profile.name}\" caricato ({len(profile.words)} parole)")
+        else:
+            QMessageBox.warning(self, "Errore", f"Impossibile caricare il profilo \"{name}\"")
+
+    def _on_save_profile(self):
+        words = self._sidebar.word_list_panel.get_words()
+        if not words:
+            QMessageBox.information(self, "Info", "La lista parole è vuota.")
+            return
+
+        name, ok = QInputDialog.getText(
+            self, "Salva Profilo", "Nome del profilo:",
+        )
+        if ok and name.strip():
+            style, custom_text = self._sidebar.get_redaction_style()
+            profile = RedactionProfile(
+                name=name.strip(),
+                words=words,
+                redaction_style=style,
+                custom_text=custom_text,
+            )
+            if self._profile_mgr.save_profile(profile):
+                self._refresh_profiles()
+                self._sidebar.set_status(f"Profilo \"{name}\" salvato")
+            else:
+                QMessageBox.warning(self, "Errore", "Impossibile salvare il profilo.")
+
+    # ═══════════════════════════════════════════════════════
+    # APPLY & EXPORT
+    # ═══════════════════════════════════════════════════════
+    def _on_apply_redactions(self):
+        if not self._selected_global_indices:
+            QMessageBox.information(self, "Info", "Nessuna parola selezionata per la redazione.")
+            return
+
+        reply = QMessageBox.question(
+            self, "Conferma Redazione",
+            f"Applicare la redazione a {len(self._selected_global_indices)} elementi?\n"
+            "Questa operazione non può essere annullata.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._sidebar.set_status("Applicazione redazioni...")
+
+        # Collect blocks to redact
+        blocks_to_redact: list[TextBlock] = []
+        for gi in self._selected_global_indices:
+            block = self._search_engine.get_block(gi)
+            if block:
+                blocks_to_redact.append(block)
+
+        # Get redaction style
+        style, custom_text = self._sidebar.get_redaction_style()
+        fill = (0, 0, 0) if style == "black" else (1, 1, 1)
+        text_color = (1, 1, 1) if style == "black" else (0, 0, 0)
+        replacement = custom_text if style == "custom" else ""
+
+        areas = self._pdf_proc.blocks_to_areas(
+            blocks_to_redact, fill_color=fill,
+            text_color=text_color, replacement_text=replacement,
         )
 
-    # --- Export ---
+        ok = self._pdf_proc.apply_redactions(
+            areas, progress_cb=lambda c, t: self._sidebar.set_progress(c, t)
+        )
+        if ok:
+            self._pdf_proc.flatten()
+            self._sidebar.set_status(
+                f"Redazione applicata: {len(blocks_to_redact)} elementi oscurati"
+            )
+            # Re-render to show redacted PDF
+            self._render_all_pages()
+            self._selected_global_indices.clear()
+            self._update_preview_selections()
+        else:
+            QMessageBox.critical(self, "Errore", "Errore durante l'applicazione delle redazioni.")
+            self._sidebar.set_status("Errore redazione")
 
     def _on_export(self):
-        if not self._pdf_processor.is_loaded:
+        if not self._pdf_proc.is_loaded:
             return
 
-        if not self._redacted_block_indices:
-            reply = QMessageBox.question(
-                self, "No Redactions",
-                "No redactions have been applied. Export the document as-is?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
-
-        default_path = self._file_manager.get_default_export_path()
-        output_path, _ = QFileDialog.getSaveFileName(
-            self, "Export Sanitized Document",
-            default_path,
-            "PDF Files (*.pdf)",
+        default_path = self._file_mgr.get_export_path()
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Esporta PDF Sanificato", default_path,
+            "PDF (*.pdf)",
         )
-        if not output_path:
-            return
-
-        self._sidebar.set_progress(10, "Applying redactions...")
-        QApplication.processEvents()
-
-        style = self._sidebar.get_redaction_style()
-        redaction_areas: list[RedactionArea] = []
-        for global_idx in sorted(self._redacted_block_indices):
-            if global_idx < len(self._all_blocks):
-                block = self._all_blocks[global_idx]
-                areas = self._pdf_processor.blocks_to_redaction_areas(
-                    [block],
-                    fill_color=style["fill_color"],
-                    text_color=style["text_color"],
-                    replacement_text=style["replacement_text"],
+        if path:
+            if self._pdf_proc.export(path):
+                self._sidebar.set_status(f"Esportato: {Path(path).name}")
+                QMessageBox.information(
+                    self, "Esportazione Completata",
+                    f"Il documento sanificato è stato salvato in:\n{path}",
                 )
-                redaction_areas.extend(areas)
+            else:
+                QMessageBox.critical(self, "Errore", "Errore durante l'esportazione.")
 
-        if redaction_areas:
-            def redact_progress(current, total):
-                pct = int(10 + (current / max(total, 1)) * 50)
-                self._sidebar.set_progress(pct, f"Redacting page {current}/{total}")
-                QApplication.processEvents()
-
-            success = self._pdf_processor.apply_redactions(redaction_areas, redact_progress)
-            if not success:
-                QMessageBox.critical(self, "Error", "Failed to apply redactions.")
-                return
-
-        self._sidebar.set_progress(70, "Flattening document...")
-        QApplication.processEvents()
-
-        self._pdf_processor.flatten()
-
-        self._sidebar.set_progress(90, "Exporting...")
-        QApplication.processEvents()
-
-        success = self._pdf_processor.export(output_path)
-        if success:
-            self._sidebar.set_progress(100, f"Exported to {os.path.basename(output_path)}")
-            QMessageBox.information(
-                self, "Export Complete",
-                f"Sanitized document saved to:\n{output_path}\n\n"
-                "The original file has not been modified."
-            )
-        else:
-            QMessageBox.critical(self, "Error", "Failed to export the document.")
-
-    # --- Navigation ---
-
-    def _on_prev_page(self):
-        if self._current_page_idx > 0:
-            self._render_page(self._current_page_idx - 1)
-
-    def _on_next_page(self):
-        if self._current_page_idx < self._pdf_processor.page_count - 1:
-            self._render_page(self._current_page_idx + 1)
-
-    # --- Settings ---
-
-    def _on_locale_changed(self, locale: str):
-        self._ner_engine.locale = locale
-        self._ocr_engine.lang = {
-            "it": "ita+eng", "en": "eng", "de": "deu+eng",
-            "fr": "fra+eng", "es": "spa+eng",
-        }.get(locale, "eng")
-        self._i18n.locale = locale
-        self._sidebar.update_labels()
-
-    def _on_presets_changed(self, enabled: set):
-        self._ner_engine.enabled_entities = enabled
-
-    # --- Helpers ---
-
-    def _reset_state(self):
-        self._pages = []
-        self._entities = []
-        self._all_blocks = []
-        self._page_block_offsets = []
-        self._redacted_block_indices.clear()
-        self._ai_detected_indices.clear()
-        self._current_page_idx = 0
-        self._pdf_processor.close()
-        self._file_manager.cleanup()
-
-    def _show_about(self):
-        QMessageBox.about(
-            self, "About AI Document Redactor Pro",
-            "<h2>AI Document Redactor Pro</h2>"
-            "<p>Version 1.0.0</p>"
-            "<p>100% Offline Document Redaction Tool</p>"
-            "<p>Features:</p>"
-            "<ul>"
-            "<li>AI-powered sensitive data detection (NER)</li>"
-            "<li>True content-stream redaction (not just overlay)</li>"
-            "<li>PDF flattening to prevent forensic recovery</li>"
-            "<li>Original file integrity guaranteed</li>"
-            "<li>Multi-language support</li>"
-            "</ul>"
-            "<p><b>Privacy-First:</b> No data ever leaves your device.</p>"
-        )
-
+    # ═══════════════════════════════════════════════════════
+    # CLEANUP
+    # ═══════════════════════════════════════════════════════
     def closeEvent(self, event):
-        self._file_manager.cleanup()
-        self._pdf_processor.close()
+        self._pdf_proc.close()
+        self._file_mgr.cleanup()
         super().closeEvent(event)
